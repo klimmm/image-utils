@@ -40,7 +40,7 @@ jobs:
           data/images/
         sparse-checkout-cone-mode: false
         path: cian-tracker-data
-        token: ${{ secrets.token || secrets.GITHUB_TOKEN }}
+        token: ${{ secrets.CROSS_REPO_TOKEN || secrets.token || secrets.GITHUB_TOKEN }}
         fetch-depth: 0
     
     - name: Set up Python
