@@ -1,6 +1,13 @@
 name: Process Images
 
 on:
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: 'Run in test mode with sample data'
+        required: false
+        default: true
+        type: boolean
   workflow_call:
     inputs:
       image_urls_json:
@@ -42,8 +49,22 @@ jobs:
         import json
         import os
         
-        # Parse input data
-        image_urls_data = json.loads('${{ inputs.image_urls_json }}')
+        # Handle test mode or real data
+        if '${{ github.event_name }}' == 'workflow_dispatch' and '${{ inputs.test_mode }}' == 'true':
+            # Use sample test data
+            image_urls_data = [
+                {
+                    'offer_id': 'test_001',
+                    'image_urls': [
+                        'https://via.placeholder.com/400x300?text=Test+Image+1',
+                        'https://via.placeholder.com/400x300?text=Test+Image+2'
+                    ]
+                }
+            ]
+            print('Running in test mode with sample data')
+        else:
+            # Parse input data from workflow_call
+            image_urls_data = json.loads('${{ inputs.image_urls_json }}')
         
         # Import processing modules
         from image_filter import prefilter_listings_for_download
