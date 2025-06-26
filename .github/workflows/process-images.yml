@@ -108,7 +108,7 @@ jobs:
         
         # Process images
         # Filter listings for new downloads
-        filtered_listings = prefilter_listings_for_download(image_urls_data)
+        filtered_listings = prefilter_listings_for_download(image_urls_data, 'temp_images')
         print(f'Filtered {len(filtered_listings)} listings for download')
         
         # Download new images
