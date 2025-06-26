@@ -32,12 +32,13 @@ jobs:
     - name: Checkout image-utils repository
       uses: actions/checkout@v4
     
-    - name: Checkout cian-tracker data/images
+    - name: Checkout cian-tracker data
       uses: actions/checkout@v4
       with:
         repository: klimmm/cian-tracker
         sparse-checkout: |
           data/images/
+          data/cian_data/image_urls.json
         sparse-checkout-cone-mode: false
         path: cian-tracker-data
         token: ${{ secrets.CROSS_REPO_TOKEN || secrets.token || secrets.GITHUB_TOKEN }}
@@ -73,9 +74,19 @@ jobs:
                 }
             ]
             print('Running in test mode with sample data')
-        else:
+        elif '${{ github.event_name }}' == 'workflow_call':
             # Parse input data from workflow_call
             image_urls_data = json.loads('${{ inputs.image_urls_json }}')
+        else:
+            # Read from cian-tracker data file
+            image_urls_file = 'cian-tracker-data/data/cian_data/image_urls.json'
+            if os.path.exists(image_urls_file):
+                with open(image_urls_file, 'r', encoding='utf-8') as f:
+                    image_urls_data = json.load(f)
+                print(f'Loaded {len(image_urls_data)} listings from cian-tracker data')
+            else:
+                print('No image_urls.json file found, using empty data')
+                image_urls_data = []
         
         # Import processing modules
         from image_filter import prefilter_listings_for_download
