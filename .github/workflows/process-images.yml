@@ -55,11 +55,40 @@ jobs:
         python -m pip install --upgrade pip
         pip install tensorflow pillow numpy scikit-learn imagehash
     
-    - name: Process images
+    - name: Check for data to process
+      id: check_data
       run: |
+        if '${{ github.event_name }}' == 'workflow_dispatch' && '${{ inputs.test_mode }}' == 'true'; then
+          echo "has_data=true" >> $GITHUB_OUTPUT
+          echo "Running in test mode with sample data"
+        elif '${{ github.event_name }}' == 'workflow_call'; then
+          echo "has_data=true" >> $GITHUB_OUTPUT
+          echo "Processing data from workflow call"
+        elif [ -f "cian-tracker-data/data/cian_data/image_urls.json" ]; then
+          echo "has_data=true" >> $GITHUB_OUTPUT
+          echo "Image URLs file found, proceeding with image processing"
+        else
+          echo "has_data=false" >> $GITHUB_OUTPUT
+          echo "No image URLs file found, skipping image processing"
+        fi
+
+    - name: Process images
+      if: steps.check_data.outputs.has_data == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+      run: |
+        echo "🖼️ Starting image download and processing..."
         python -c "
-        import json
+        import sys
         import os
+        sys.path.insert(0, os.getcwd())
+        
+        from image_filter import prefilter_listings_for_download
+        from download_images import download_images
+        from image_dedup import dedupe_images
+        from predict_image import predict_images_batch
+        from load_model import load_model
+        import json
         
         # Handle test mode or real data
         if '${{ github.event_name }}' == 'workflow_dispatch' and '${{ inputs.test_mode }}' == 'true':
@@ -80,23 +109,17 @@ jobs:
         else:
             # Read from cian-tracker data file
             image_urls_file = 'cian-tracker-data/data/cian_data/image_urls.json'
-            if os.path.exists(image_urls_file):
-                with open(image_urls_file, 'r', encoding='utf-8') as f:
-                    image_urls_data = json.load(f)
-                print(f'Loaded {len(image_urls_data)} listings from cian-tracker data')
-            else:
-                print('No image_urls.json file found, using empty data')
-                image_urls_data = []
+            with open(image_urls_file, 'r', encoding='utf-8') as f:
+                image_urls_data = json.load(f)
+                
+        print(f'📊 Loaded {len(image_urls_data)} listings with image URLs')
         
-        # Import processing modules
-        from image_filter import prefilter_listings_for_download
-        from download_images import download_images
-        from image_dedup import dedupe_images
-        from predict_image import predict_images_batch
-        from load_model import load_model
+        # Configuration
+        image_dir = 'temp_images'
+        model_path = 'best_model.h5'
         
-        # Create temporary directories
-        os.makedirs('temp_images', exist_ok=True)
+        # Create images directory if it doesn't exist
+        os.makedirs(image_dir, exist_ok=True)
         
         # Check if we have existing images from cian-tracker
         existing_images_dir = 'cian-tracker-data/data/images'
@@ -113,29 +136,64 @@ jobs:
                     shutil.copytree(src, dst, dirs_exist_ok=True)
             print(f'Copied existing images to temp_images directory')
         
-        # Load model
-        model_path = 'best_model.h5'
-        model = load_model(model_path)
-        
-        # Process images
-        # Filter listings for new downloads
-        filtered_listings = prefilter_listings_for_download(image_urls_data, 'temp_images')
-        print(f'Filtered {len(filtered_listings)} listings for download')
-        
-        # Download new images
-        if filtered_listings:
-            download_images(filtered_listings, 'temp_images')
-            print(f'Downloaded images for {len(filtered_listings)} new listings')
-        
-        # Deduplicate all images (existing + new)
-        dedupe_images('temp_images')
-        
-        # Predict quality on all images
-        predictions = predict_images_batch('temp_images', model)
-        
-        # Save results
-        with open('processing_results.json', 'w') as f:
-            json.dump(predictions, f)
+        try:
+            if not image_urls_data:
+                print('✅ No listings with image URLs found')
+                exit(0)
+                
+            print(f'📋 Processing {len(image_urls_data)} listings with image URLs')
+            
+            # Step 1: Pre-filter listings to avoid unnecessary downloads
+            print('🧹 Pre-filtering listings for download...')
+            filtered_listings = prefilter_listings_for_download(image_urls_data, image_dir)
+            print(f'📊 Filtered to {len(filtered_listings)} listings requiring download (from {len(image_urls_data)} total)')
+            
+            # Step 2: Download images (only for filtered listings)
+            if filtered_listings:
+                print('🖼️ Starting image download process...')
+                download_images(filtered_listings, image_dir)
+                print('✅ Image download completed!')
+            else:
+                print('ℹ️ No listings require image downloads - all images already present')
+            
+            # Step 3: Deduplicate images
+            print('🧹 Starting image deduplication...')
+            for listing in image_urls_data:
+                offer_id = str(listing.get('offer_id'))
+                offer_dir = os.path.join(image_dir, offer_id)
+                if os.path.exists(offer_dir):
+                    from image_dedup import dedupe_images
+                    dedupe_images(offer_dir, hash_size=8, max_distance=0)
+            print('✅ Image deduplication completed!')
+            
+            # Step 4: Run ML predictions if model exists
+            print('🤖 Starting ML predictions on images...')
+            if os.path.exists(model_path):
+                model = load_model(model_path)
+                if model is not None:
+                    stats = predict_images_batch(image_urls_data, image_dir, model, max_workers=4)
+                    print(f'✅ ML predictions completed: {stats[\"total_processed\"]} images processed')
+                else:
+                    print('⚠️ Model not loaded, skipping predictions')
+            else:
+                print('⚠️ Model file not found, skipping predictions')
+                
+            print('✅ Image processing pipeline completed successfully!')
+            
+            # Save results for artifact upload
+            results = {
+                'total_listings': len(image_urls_data),
+                'filtered_listings': len(filtered_listings),
+                'status': 'completed'
+            }
+            with open('processing_results.json', 'w') as f:
+                json.dump(results, f)
+            
+        except Exception as e:
+            print(f'❌ Error during image processing: {e}')
+            import traceback
+            traceback.print_exc()
+            exit(1)
         "
     
     - name: Upload results
@@ -148,6 +206,7 @@ jobs:
         retention-days: 7
     
     - name: Push processed images back to cian-tracker
+      if: steps.check_data.outputs.has_data == 'true'
       run: |
         cd cian-tracker-data
         git config user.name "github-actions[bot]"
@@ -158,25 +217,78 @@ jobs:
         
         # Check if there are changes and commit
         if [ -n "$(git status --porcelain data/images/)" ]; then
+          echo "📁 Adding processed images to git..."
           git add data/images/
-          git commit -m "Update processed images from image-utils workflow
           
+          # Create commit message with timestamp
+          TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+          COMMIT_MSG="Auto-process images on $TIMESTAMP
+
           🤖 Generated with [Claude Code](https://claude.ai/code)
-          
+
           Co-Authored-By: Claude <noreply@anthropic.com>"
-          git push
-          echo "✅ Successfully pushed processed images to cian-tracker repository"
+          
+          echo "💾 Committing changes..."
+          git commit -m "$COMMIT_MSG"
+          
+          echo "🚀 Pushing to remote repository with retry logic..."
+          
+          # Retry push with pull if needed
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if git push; then
+              echo "✅ Images committed and pushed successfully"
+              break
+            else
+              echo "⚠️ Push failed (attempt $((RETRY_COUNT + 1))/$MAX_RETRIES)"
+              
+              if [ $RETRY_COUNT -lt $((MAX_RETRIES - 1)) ]; then
+                echo "🔄 Pulling latest changes and retrying..."
+                
+                # Stash any unstaged changes
+                git stash push -m "Temporary stash before pull" || true
+                
+                # Pull with rebase
+                if git pull --rebase origin main; then
+                  echo "✅ Successfully pulled and rebased changes"
+                  
+                  # Pop stashed changes back if any
+                  git stash pop || true
+                  
+                  echo "⏳ Retrying push in 5 seconds..."
+                  sleep 5
+                else
+                  echo "❌ Failed to pull and rebase"
+                  break
+                fi
+              fi
+              
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+            fi
+          done
+          
+          if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+            echo "❌ Failed to push after $MAX_RETRIES attempts"
+            exit 1
+          fi
         else
-          echo "ℹ️ No changes in processed images, skipping push"
+          echo "ℹ️ No new images to commit"
         fi
     
-    - name: Show processing summary
+    - name: Summary
+      if: always()
       run: |
-        echo "=== Image Processing Summary ==="
-        if [ -f "processing_results.json" ]; then
-          echo "Results file created successfully"
-          echo "Processed images count: $(find temp_images -name "*.jpg" -o -name "*.png" -o -name "*.jpeg" | wc -l)"
+        echo "🏁 Image processing workflow completed"
+        if [ "${{ steps.check_data.outputs.has_data }}" = "true" ]; then
+          echo "✅ Data was processed"
+          if [ -f "processing_results.json" ]; then
+            echo "📋 Results file created successfully"
+            echo "📊 Processed images count: $(find temp_images -name "*.jpg" -o -name "*.png" -o -name "*.jpeg" 2>/dev/null | wc -l)"
+          else
+            echo "⚠️ No results file found"
+          fi
         else
-          echo "No results file found"
+          echo "ℹ️ No data to process"
         fi
-        echo "================================"
