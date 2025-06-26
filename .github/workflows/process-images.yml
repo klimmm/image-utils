@@ -111,6 +111,13 @@ jobs:
             image_urls_file = 'cian-tracker-data/data/cian_data/image_urls.json'
             with open(image_urls_file, 'r', encoding='utf-8') as f:
                 image_urls_data = json.load(f)
+        
+        # Convert comma-separated image_urls strings to arrays
+        for listing in image_urls_data:
+            if 'image_urls' in listing and isinstance(listing['image_urls'], str):
+                # Split comma-separated string into array and clean up
+                urls = [url.strip() for url in listing['image_urls'].split(',') if url.strip()]
+                listing['image_urls'] = urls
                 
         print(f'📊 Loaded {len(image_urls_data)} listings with image URLs')
         
