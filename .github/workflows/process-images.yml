@@ -32,6 +32,17 @@ jobs:
     - name: Checkout image-utils repository
       uses: actions/checkout@v4
     
+    - name: Checkout cian-tracker data/images
+      uses: actions/checkout@v4
+      with:
+        repository: klimmm/cian-tracker
+        sparse-checkout: |
+          data/images/
+        sparse-checkout-cone-mode: false
+        path: cian-tracker-data
+        token: ${{ secrets.token || secrets.GITHUB_TOKEN }}
+        fetch-depth: 0
+    
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
@@ -76,22 +87,39 @@ jobs:
         # Create temporary directories
         os.makedirs('temp_images', exist_ok=True)
         
+        # Check if we have existing images from cian-tracker
+        existing_images_dir = 'cian-tracker-data/data/images'
+        if os.path.exists(existing_images_dir):
+            print(f'Found existing images directory: {existing_images_dir}')
+            # Copy existing images to processing directory
+            import shutil
+            for item in os.listdir(existing_images_dir):
+                src = os.path.join(existing_images_dir, item)
+                dst = os.path.join('temp_images', item)
+                if os.path.isfile(src):
+                    shutil.copy2(src, dst)
+                elif os.path.isdir(src):
+                    shutil.copytree(src, dst, dirs_exist_ok=True)
+            print(f'Copied existing images to temp_images directory')
+        
         # Load model
         model_path = 'best_model.h5'
         model = load_model(model_path)
         
         # Process images
-        # Filter listings
+        # Filter listings for new downloads
         filtered_listings = prefilter_listings_for_download(image_urls_data)
         print(f'Filtered {len(filtered_listings)} listings for download')
         
-        # Download images
-        download_images(filtered_listings, 'temp_images')
+        # Download new images
+        if filtered_listings:
+            download_images(filtered_listings, 'temp_images')
+            print(f'Downloaded images for {len(filtered_listings)} new listings')
         
-        # Deduplicate
+        # Deduplicate all images (existing + new)
         dedupe_images('temp_images')
         
-        # Predict quality
+        # Predict quality on all images
         predictions = predict_images_batch('temp_images', model)
         
         # Save results
@@ -107,3 +135,37 @@ jobs:
           processing_results.json
           temp_images/
         retention-days: 7
+    
+    - name: Push processed images back to cian-tracker
+      run: |
+        cd cian-tracker-data
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # Copy processed images back
+        cp -r ../temp_images/* data/images/
+        
+        # Check if there are changes and commit
+        if [ -n "$(git status --porcelain data/images/)" ]; then
+          git add data/images/
+          git commit -m "Update processed images from image-utils workflow
+          
+          🤖 Generated with [Claude Code](https://claude.ai/code)
+          
+          Co-Authored-By: Claude <noreply@anthropic.com>"
+          git push
+          echo "✅ Successfully pushed processed images to cian-tracker repository"
+        else
+          echo "ℹ️ No changes in processed images, skipping push"
+        fi
+    
+    - name: Show processing summary
+      run: |
+        echo "=== Image Processing Summary ==="
+        if [ -f "processing_results.json" ]; then
+          echo "Results file created successfully"
+          echo "Processed images count: $(find temp_images -name "*.jpg" -o -name "*.png" -o -name "*.jpeg" | wc -l)"
+        else
+          echo "No results file found"
+        fi
+        echo "================================"
