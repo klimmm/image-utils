@@ -155,11 +155,39 @@ jobs:
             filtered_listings = prefilter_listings_for_download(image_urls_data, image_dir)
             print(f'📊 Filtered to {len(filtered_listings)} listings requiring download (from {len(image_urls_data)} total)')
             
-            # Step 2: Download images (only for filtered listings)
+            # Step 2: Download images (only for filtered listings) with 30-minute timeout
             if filtered_listings:
                 print('🖼️ Starting image download process...')
-                download_images(filtered_listings, image_dir)
-                print('✅ Image download completed!')
+                import signal
+                import time
+                from contextlib import contextmanager
+                
+                @contextmanager
+                def timeout(duration):
+                    def timeout_handler(signum, frame):
+                        raise TimeoutError(f'Image download timed out after {duration} seconds')
+                    
+                    # Set the signal handler and a timeout alarm
+                    signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(duration)
+                    
+                    try:
+                        yield
+                    finally:
+                        # Disable the alarm
+                        signal.alarm(0)
+                
+                try:
+                    # 30 minutes = 1800 seconds
+                    with timeout(1800):
+                        download_images(filtered_listings, image_dir)
+                    print('✅ Image download completed within time limit!')
+                except TimeoutError as e:
+                    print(f'⏰ {e}')
+                    print('⚠️ Continuing to next step with partial downloads...')
+                except Exception as e:
+                    print(f'❌ Error during image download: {e}')
+                    print('⚠️ Continuing to next step...')
             else:
                 print('ℹ️ No listings require image downloads - all images already present')
             

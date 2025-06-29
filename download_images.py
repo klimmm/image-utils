@@ -73,7 +73,7 @@ def download_single_image(args):
         try:
             # Add some randomization to avoid overwhelming the server
             if retry > 0:
-                sleep_time = random.uniform(1, 3) * (retry + 1)
+                sleep_time = random.uniform(0.1, 0.3) * (retry + 1)
                 time.sleep(sleep_time)
 
             logger.info(
@@ -96,19 +96,19 @@ def download_single_image(args):
                 )
                 if resp.status_code in (403, 429):
                     # Rate limiting - wait longer
-                    backoff = 5 + retry * 5
+                    backoff = 1 + retry * 2
                     time.sleep(backoff)
                 elif resp.status_code == 404:
                     # Image not found - don't retry
                     return f"{offer_id}_{abs_idx}", False, f"HTTP {resp.status_code}"
                 else:
-                    backoff = 1 + retry * 2
+                    backoff = 0.2 + retry * 0.5
                     time.sleep(backoff)
 
         except (requests.RequestException, ConnectionError, TimeoutError) as e:
             error_msg = str(e)
             if retry < max_retries - 1:
-                backoff = 3 + retry * 2
+                backoff = 0.5 + retry * 0.5
                 logger.warning(
                     f"⚠️ [{offer_id}] Error on img {abs_idx+1} try {retry+1}: {error_msg}. Retrying in {backoff}s"
                 )
@@ -123,7 +123,7 @@ def download_single_image(args):
 
 
 def download_images_for_listing_parallel(
-    listing, image_dir, max_retries, max_workers=4
+    listing, image_dir, max_retries, max_workers=6
 ):
     """Download images for a single listing using parallel workers."""
     offer_id = listing["offer_id"]
@@ -187,7 +187,7 @@ def download_images(
     image_dir,
     max_retries=3,
     batch_size=5,
-    workers=4,
+    workers=6,
 ):
     """
     Batch download images without prediction.
@@ -225,7 +225,7 @@ def download_images(
             overall_errors += errors
 
         if i + 1 < total_batches:
-            pause = 10 + random.random() * 20
+            pause = 2 + random.random() * 3
             logger.info(f"😴 Sleeping {pause:.1f}s between batches...")
             time.sleep(pause)
 
